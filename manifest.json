@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Raisintine Question Detector",
+  "version": "1.0",
+  "description": "Detects questions and prints answers from index.json",
+  "permissions": ["activeTab", "scripting"],
+  "content_scripts": [
+    {
+      "matches": ["https://raisintine.fr/chocolatine/question.php*"],
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["index.json"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
