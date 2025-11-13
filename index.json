@@ -100,5 +100,19 @@
   "Comment ne récupérer que le dernier mot de la chaîne de caractères a = \"Explicit is better than implicit.\" sans le point final ?": "a[-9:-1]",
   "Comment ne récupérer que le dernier mot de la chaîne de caractères a = \"Simple is better than complex.\" sans le point final ?": "a[-8:-1]",
   "Comment ne récupérer que le premier mot de la chaîne de caractères a = \"Complex is better than complicated.\" ?": "a[:7]",
-  "Quels types construits sont muables ?": ["les listes", "les dictionnaires"]
+  "Quels types construits sont muables ?": ["les listes", "les dictionnaires"],
+  "Classer ces conditions selon leur valeur :": {
+    "4 in [2, 4, 6]": "True",
+    "2 in (2, 4, 6)": "True",
+    "\"p\" not in \"chocolatine\"": "True",
+    "4 not in [2, 4, 6]": "False",
+    "2 not in (2, 4, 6)": "False",
+    "4 in [1, 3, 5]": "False"
+  },
+  "Associer chaque type de fusion de tables à son schéma :": {
+    "Fusion externe gauche": "https://raisintine.fr/chocolatine/assets/1/externe_gauche.png",
+    "Fusion externe droite": "https://raisintine.fr/chocolatine/assets/1/externe_droite.png",
+    "Fusion interne": "https://raisintine.fr/chocolatine/assets/1/interne.png",
+    "Fusion externe entière": "https://raisintine.fr/chocolatine/assets/1/externe_entiere.png"
+  }
 }
