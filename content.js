@@ -57,6 +57,58 @@
     };
 
     const getSmartAnswer = (questionText, codeSnippet) => {
+        // First check if there's a code variant match
+        if (index.__codeVariants__ && codeSnippet) {
+            const variants = index.__codeVariants__;
+            for (const [variantQuestionPattern, variantList] of Object.entries(variants)) {
+                // Exact match for question text
+                if (questionText === variantQuestionPattern || questionText.includes(variantQuestionPattern)) {
+                    console.log("Checking code variants for:", variantQuestionPattern);
+                    console.log("Code snippet preview:", codeSnippet.substring(0, 200));
+                    
+                    // Handle different variant structures
+                    if (Array.isArray(variantList)) {
+                        for (const variant of variantList) {
+                            // Simple pattern with direct answer
+                            if (variant.answer && !variant.subPatterns) {
+                                const importPattern = new RegExp(variant.codePattern, 'i');
+                                if (importPattern.test(codeSnippet)) {
+                                    console.log("✓ Matched pattern:", variant.codePattern, "Answer:", variant.answer);
+                                    return variant.answer;
+                                }
+                            }
+                            // Complex pattern with subPatterns
+                            else if (variant.subPatterns) {
+                                const importPattern = new RegExp(variant.codePattern, 'i');
+                                if (importPattern.test(codeSnippet)) {
+                                    console.log("✓ Found import style:", variant.codePattern);
+                                    
+                                    // Now check subPatterns for the specific function
+                                    for (const sub of variant.subPatterns) {
+                                        const subPattern = new RegExp(sub.pattern, 'i');
+                                        if (subPattern.test(codeSnippet)) {
+                                            console.log("✓ Matched sub-pattern:", sub.pattern, "Answer:", sub.answer);
+                                            return sub.answer;
+                                        }
+                                    }
+                                    
+                                    // If function name not found in code (placeholder text), infer from question
+                                    console.log("Function name not found in code, inferring from question...");
+                                    if (questionText.includes("dictionnaires")) {
+                                        console.log("✓ Question mentions 'dictionnaires', using DictReader");
+                                        return variant.subPatterns[0].answer; // DictReader is first
+                                    } else if (questionText.includes("listes")) {
+                                        console.log("✓ Question mentions 'listes', using reader");
+                                        return variant.subPatterns[1].answer; // reader is second
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (index[questionText] !== undefined) return index[questionText];
         if (codeSnippet) {
             const nestedMatch = codeSnippet.match(/for\s+(\w+)\s+in\s+range\(\s*len\(tab\)\s*\)\s*:[\r\n\s]*for\s+(\w+)\s+in\s+range\(\s*len\(tab\[\s*\1\s*\]\s*\)\s*:/);
@@ -156,6 +208,8 @@
             if (arr[i] !== undefined) {
                 input.value = arr[i];
                 input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log("Filled input", i, "with:", arr[i]);
                 try { input.onkeyup?.(); input.onmouseenter?.(); } catch {}
             }
         });
@@ -183,6 +237,58 @@
                 span.style.fontWeight = 'bold';
                 span.style.color = 'blue';
                 textEl.prepend(span);
+            }
+        });
+    };
+
+    const autoFillDragDropMatching = (qElem) => {
+        const questionText = qElem.textContent.trim();
+        const map = index[questionText];
+        if (!map || typeof map !== 'object' || Array.isArray(map)) return;
+        
+        const container = qElem.closest('div[id^="cadre-formulaire"]');
+        if (!container) return;
+        
+        const id = qElem.id.split('-')[2];
+        if (!id) return;
+        
+        // Get all keys (top row - elem1)
+        const keyElements = [...container.querySelectorAll(`.elem1-${id}`)];
+        if (keyElements.length === 0) return;
+        
+        // Get all value elements (bottom row - elem2)
+        const valueElements = [...container.querySelectorAll(`.elem2-${id}`)];
+        if (valueElements.length === 0) return;
+        
+        // Build a mapping from image src to value element
+        const urlToValueElem = new Map();
+        valueElements.forEach(elem => {
+            const img = elem.querySelector('img');
+            if (img && img.src) {
+                urlToValueElem.set(img.src, elem);
+            }
+        });
+        
+        // Process each key in order
+        let order = 1;
+        keyElements.forEach(keyElem => {
+            const keyText = keyElem.querySelector('.mixer')?.textContent.trim();
+            if (!keyText) return;
+            
+            // Get the corresponding URL from the index mapping
+            const correspondingUrl = map[keyText];
+            if (!correspondingUrl) return;
+            
+            // Find the value element with this URL
+            const matchingValueElem = urlToValueElem.get(correspondingUrl);
+            if (!matchingValueElem) return;
+            
+            // Update the ordre-* element (p tag with id like "ordre-M2-0")
+            const ordreElem = matchingValueElem.querySelector('[id^="ordre-"]');
+            if (ordreElem) {
+                ordreElem.textContent = `${order++}. `;
+                ordreElem.style.fontWeight = 'bold';
+                ordreElem.style.color = 'blue';
             }
         });
     };
@@ -241,12 +347,22 @@
     const processQuestion = (qElem) => {
         const questionText = qElem.textContent.trim();
         const codeEl = qElem.closest('div[id^="cadre-formulaire"]')?.querySelector('pre code.language-python');
-        const codeSnippet = codeEl?.textContent ?? null;
+        let codeSnippet = null;
+        
+        if (codeEl) {
+            // Extract text content properly from code element
+            codeSnippet = codeEl.textContent || codeEl.innerText;
+            console.log("Code snippet found:", codeSnippet.substring(0, 100));
+        }
+        
         console.log("Question detected:", questionText);
+        console.log("Code variant check:", index.__codeVariants__ ? "Enabled" : "Disabled");
+        
         highlightAnswers(questionText);
         fillTextInputs(questionText, codeSnippet);
         addFusionNumbers(qElem);
-        classifyConditions(qElem); // 🆕 handle “Classer ces conditions selon leur valeur”
+        autoFillDragDropMatching(qElem); // 🆕 handle drag-drop matching questions
+        classifyConditions(qElem); // 🆕 handle "Classer ces conditions selon leur valeur"
     };
 
     const questionElement = await waitForElement('.mixer[id^="texte-question"]');
