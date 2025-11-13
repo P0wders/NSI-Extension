@@ -114,5 +114,53 @@
     "Fusion externe droite": "https://raisintine.fr/chocolatine/assets/1/externe_droite.png",
     "Fusion interne": "https://raisintine.fr/chocolatine/assets/1/interne.png",
     "Fusion externe entière": "https://raisintine.fr/chocolatine/assets/1/externe_entiere.png"
+  },
+  "__codeVariants__": {
+    "Compléter le code suivant pour obtenir une liste de listes contenant les données du fichier CSV": [
+      {
+        "codePattern": "import csv",
+        "subPatterns": [
+          { "pattern": "DictReader", "answer": "csv.DictReader" },
+          { "pattern": "reader", "answer": "csv.reader" }
+        ]
+      },
+      {
+        "codePattern": "from csv import",
+        "subPatterns": [
+          { "pattern": "DictReader", "answer": "DictReader" },
+          { "pattern": "reader", "answer": "reader" }
+        ]
+      }
+    ],
+    "Compléter le code suivant pour obtenir une liste de dictionnaires contenant les données du fichier CSV": [
+      {
+        "codePattern": "import csv",
+        "subPatterns": [
+          { "pattern": "DictReader", "answer": "csv.DictReader" },
+          { "pattern": "reader", "answer": "csv.reader" }
+        ]
+      },
+      {
+        "codePattern": "from csv import",
+        "subPatterns": [
+          { "pattern": "DictReader", "answer": "DictReader" },
+          { "pattern": "reader", "answer": "reader" }
+        ]
+      }
+    ],
+    "Compléter le code suivant :": [
+      {
+        "codePattern": "with\\s+open.*as.*csvfile",
+        "answer": "as"
+      },
+      {
+        "codePattern": "with\\s*\\(.*\\.csv",
+        "answer": "open"
+      },
+      {
+        "codePattern": "open\\(.*\\.csv",
+        "answer": "with"
+      }
+    ]
   }
 }
