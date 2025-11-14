@@ -51,6 +51,7 @@
   "Quelle fonction native de python permet de générer une liste ne pouvant pas accueillir deux fois la même valeur ?": "set()",
   "Compléter l'instruction python qui permet d'extraire le nom de toutes les personnes ayant la fonction de professeur de la table personnes. La liste doit être générée par compréhension.": "for p in personnes if p[\"fonction\"]==\"professeur\"",
   "Compléter l'instruction python qui permet d'extraire le nom de toutes les personnes de plus de 20 ans de la table personnes. La liste doit être générée par compréhension.": "for x in personnes if x[\"age\"]>20",
+  "Compléter l'instruction python qui permet d'extraire le nom de toutes les personnes de moins de 18 ans de la table eleves. La liste doit être générée par compréhension.": "for x in eleves if x[\"age\"]<18",
   "Quelle instruction python extrait le nom et le prénom des élèves majeurs de la table eff ?": "[(eleve['nom'], eleve['prénom']) for eleve in eff if eleve['age'] >= 18]",
   "Quelle méthode permet de trier une liste en python ?": ".sort()",
   "Quelle instruction ne modifie pas la liste d'origine lors de son exécution ?": "sorted(liste)",
@@ -101,7 +102,9 @@
   "Comment ne récupérer que le dernier mot de la chaîne de caractères a = \"Simple is better than complex.\" sans le point final ?": "a[-8:-1]",
   "Comment ne récupérer que le premier mot de la chaîne de caractères a = \"Complex is better than complicated.\" ?": "a[:7]",
   "Quels types construits sont muables ?": ["les listes", "les dictionnaires"],
-  "Classer ces conditions selon leur valeur :": {
+  "Que réalise cette instruction ?": "Elle permet d'extraire le nom des pays d'Afrique de la table 'pays'.",
+  "Dans cette table, \"{'Nom':'Andy', 'Niveau':3, 'Âge':9}\" est :": "un enregistrement",
+  "Classer ces conditions selon leur valeur ": {
     "4 in [2, 4, 6]": "True",
     "2 in (2, 4, 6)": "True",
     "\"p\" not in \"chocolatine\"": "True",
@@ -115,6 +118,9 @@
     "Fusion interne": "https://raisintine.fr/chocolatine/assets/1/interne.png",
     "Fusion externe entière": "https://raisintine.fr/chocolatine/assets/1/externe_entiere.png"
   },
+  "Compléter le code python ci-dessous pour trier les pays du plus petit au plus grand en superficie.": "sort(key=cle_superficie)",
+  "Compléter le code python ci-dessous pour trier les pays du plus grand au plus petit en superficie.": "sort(key=cle_superficie, reverse=True)",
+  "Compléter le code python ci-dessous pour trier les pays du plus peuplé au moins peuplé.": "sort(key=cle_population, reverse=True)",
   "__codeVariants__": {
     "Compléter le code suivant pour obtenir une liste de listes contenant les données du fichier CSV": [
       {
@@ -150,16 +156,20 @@
     ],
     "Compléter le code suivant :": [
       {
-        "codePattern": "with\\s+open.*as.*csvfile",
+        "codePattern": "^\\s*as\\s+open",
+        "answer": "with"
+      },
+      {
+        "codePattern": "\\)\\s+open\\s+\\w+:",
         "answer": "as"
       },
       {
-        "codePattern": "with\\s*\\(.*\\.csv",
+        "codePattern": "with\\s+open\\s*\\(",
         "answer": "open"
       },
       {
-        "codePattern": "open\\(.*\\.csv",
-        "answer": "with"
+        "codePattern": "open.*\\.csv",
+        "answer": "as"
       }
     ]
   }
