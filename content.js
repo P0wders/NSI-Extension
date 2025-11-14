@@ -3,6 +3,56 @@
     const response = await fetch(chrome.runtime.getURL('index.json'));
     const index = await response.json();
 
+    // 🆕 --- LOGGING SYSTEM ---
+    const logQuestion = (questionData) => {
+        // Store in localStorage for later export
+        const logs = JSON.parse(localStorage.getItem('nsi_extension_logs') || '[]');
+        logs.push({
+            timestamp: new Date().toISOString(),
+            ...questionData
+        });
+        // Keep only last 100 questions to avoid bloat
+        if (logs.length > 100) logs.shift();
+        localStorage.setItem('nsi_extension_logs', JSON.stringify(logs));
+        
+        // Also send to background script to write to file
+        chrome.runtime.sendMessage({
+            action: 'logQuestion',
+            data: questionData
+        }).catch(() => {
+            // Background script might not be available, that's ok
+        });
+        
+        console.log("Question logged:", questionData);
+    };
+
+    const exportLogs = () => {
+        const logs = JSON.parse(localStorage.getItem('nsi_extension_logs') || '[]');
+        
+        if (logs.length === 0) {
+            console.warn("No logs to export! Make sure you've navigated through questions.");
+            return;
+        }
+        
+        const logText = logs.map(log => {
+            return `\n${'='.repeat(80)}\nTimestamp: ${log.timestamp}\nQuestion: ${log.questionText}\nType: ${log.type}\nCode Snippet:\n${log.codeSnippet || 'N/A'}\n\nAvailable Answers:\n${log.answers ? log.answers.map((a, i) => `  ${i + 1}. ${a}`).join('\n') : 'N/A'}\n${'='.repeat(80)}`;
+        }).join('\n');
+        
+        const blob = new Blob([logText], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `nsi_extension_log_${new Date().toISOString().slice(0,10)}.log`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        console.log(`✅ Exported ${logs.length} logged questions!`);
+    };
+
+    // Make export function available globally
+    window.exportNSILogs = exportLogs;
+
     // Helper: wait for element
     const waitForElement = (selector) => new Promise(resolve => {
         const el = document.querySelector(selector);
@@ -126,6 +176,26 @@
         // Example: "Compléter l'instruction python qui permet d'extraire le nom de toutes les personnes ayant la fonction de conseiller de la table personnes. La liste doit être générée par compréhension."
         try {
             const wantsComprehension = /compl[eé]ter|compléter|compl[eé]ter l'?instruction/i.test(questionText) && /compr(éh|e)h?ension|compr/i.test(questionText);
+            
+            // Check for age-based comprehension (e.g. "moins de 16 ans" or "plus de 36 ans")
+            const ageMatch = questionText.match(/moins de\s+(\d+)|plus de\s+(\d+)|majeur/i);
+            if (wantsComprehension && ageMatch) {
+                const age = ageMatch[1] || ageMatch[2];
+                // "moins de X" → <X, "plus de X" → >X
+                const operator = questionText.includes("moins de") ? "<" : ">";
+                const tableMatch = questionText.match(/table\s+"?([\w\-éèêàâùûôç]+)"?/i) || questionText.match(/(eleves|personnes|eff)/i);
+                const table = tableMatch ? (tableMatch[1] || tableMatch[0]) : 'eleves';
+                
+                // Extract variable name from code
+                let varName = 'x';
+                if (codeSnippet) {
+                    const varMatch = codeSnippet.match(/\[\s*([a-zA-Z_]\w*)\s*\[/i);
+                    if (varMatch) varName = varMatch[1];
+                }
+                
+                return `for ${varName} in ${table} if ${varName}["age"]${operator}${age}`;
+            }
+            
             const hasNomAndFonction = /nom/i.test(questionText) && /fonction/i.test(questionText);
             const roleMatch = questionText.match(/fonction de\s+"?([\w\-éèêàâùûôç ]+)"?/i);
             const tableMatch = questionText.match(/table\s+"?([\w\-éèêàâùûôç]+)"?/i);
@@ -205,11 +275,37 @@
         const lenQuestion = questionText.match(/sachant que\s+(\w+)\s*=\s*["']([^"']+)["'],?\s*que renvoie l'instruction\s*len\(\s*(\w+)\s*\)/i);
         if (lenQuestion && lenQuestion[1] === lenQuestion[3]) return String(Array.from(lenQuestion[2]).length);
 
+        // Handle "Quel est le type de la variable" questions - determine type from code
+        const typeVarMatch = questionText.match(/quel est le type de la variable\s+(\w+)/i);
+        if (typeVarMatch && codeSnippet) {
+            const varName = typeVarMatch[1];
+            // Check if it's using DictReader (returns list of dicts)
+            if (/DictReader/.test(codeSnippet)) {
+                return "une liste de dictionnaires";
+            }
+            // Check if it's using regular reader (returns list of lists)
+            if (/csv\.reader|reader\(/.test(codeSnippet) && !/DictReader/.test(codeSnippet)) {
+                return "une liste de listes";
+            }
+        }
+
+        // Handle sort method completions (e.g., "trier les pays du plus petit au plus grand en superficie")
+        const sortMatch = questionText.match(/trier.*(?:du|par|selon).*(?:en|superficie|population|nom|age|prix|distance|salaire|superficie)/i);
+        if (sortMatch && codeSnippet) {
+            // Check if it's reverse sorting (du plus grand au plus petit)
+            const isReverse = /du plus grand au plus petit|descending|décroissant/i.test(questionText);
+            // Extract the key function name from the code snippet
+            const keyFunctionMatch = codeSnippet.match(/def\s+(\w+)\s*\([^)]*\)\s*:\s*return\s+\w+\s*\[\s*["\']([\w]+)["\']\s*\]/);
+            if (keyFunctionMatch) {
+                return isReverse ? `sort(key=${keyFunctionMatch[1]}, reverse=True)` : `sort(key=${keyFunctionMatch[1]})`;
+            }
+        }
+
         return null;
     };
 
-    const highlightAnswers = (questionText) => {
-        let correctAnswers = getSmartAnswer(questionText);
+    const highlightAnswers = (questionText, codeSnippet) => {
+        let correctAnswers = getSmartAnswer(questionText, codeSnippet);
         if (!correctAnswers) correctAnswers = [];
         correctAnswers = Array.isArray(correctAnswers) ? correctAnswers : [correctAnswers];
 
@@ -248,6 +344,31 @@
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
                 console.log("Filled input", i, "with:", arr[i]);
+                try { input.onkeyup?.(); input.onmouseenter?.(); } catch {}
+            }
+        });
+    };
+
+    // 🆕 --- FILL TEXT INPUTS FROM IMAGE MAPPING ---
+    const fillTextInputsFromImage = (qElem) => {
+        // Find image in the question
+        const img = qElem.closest('div[id^="cadre-formulaire"]')?.querySelector('img');
+        if (!img || !img.src) return;
+        
+        // Get answers from image URL mapping in index
+        const answers = index[img.src];
+        if (!answers || !Array.isArray(answers)) return;
+        
+        // Fill the text inputs
+        const inputs = qElem.closest('div[id^="cadre-formulaire"]')?.querySelectorAll('input.form-control.reponse');
+        if (!inputs) return;
+        
+        inputs.forEach((input, i) => {
+            if (answers[i] !== undefined) {
+                input.value = answers[i];
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log("Filled input from image", i, "with:", answers[i]);
                 try { input.onkeyup?.(); input.onmouseenter?.(); } catch {}
             }
         });
@@ -298,27 +419,45 @@
         const valueElements = [...container.querySelectorAll(`.elem2-${id}`)];
         if (valueElements.length === 0) return;
         
-        // Build a mapping from image src to value element
+        // Build a mapping from image src OR code text to value element
         const urlToValueElem = new Map();
+        const codeToValueElem = new Map();
+        
         valueElements.forEach(elem => {
+            // Try to match by image
             const img = elem.querySelector('img');
             if (img && img.src) {
                 urlToValueElem.set(img.src, elem);
+            }
+            
+            // Try to match by text description (for code line matching)
+            const textElem = elem.querySelector('[id^="texte-"]');
+            if (textElem) {
+                const text = textElem.textContent.trim();
+                codeToValueElem.set(text, elem);
             }
         });
         
         // Process each key in order
         let order = 1;
         keyElements.forEach(keyElem => {
-            const keyText = keyElem.querySelector('.mixer')?.textContent.trim();
+            // For code-based matching, get the code text
+            const codeElem = keyElem.querySelector('pre code');
+            let keyText = codeElem ? (codeElem.textContent || codeElem.innerText).trim() : null;
+            
+            // Fallback to mixer text if no code found
+            if (!keyText) {
+                keyText = keyElem.querySelector('.mixer')?.textContent.trim();
+            }
+            
             if (!keyText) return;
             
-            // Get the corresponding URL from the index mapping
-            const correspondingUrl = map[keyText];
-            if (!correspondingUrl) return;
+            // Get the corresponding value from index mapping
+            const correspondingValue = map[keyText];
+            if (!correspondingValue) return;
             
-            // Find the value element with this URL
-            const matchingValueElem = urlToValueElem.get(correspondingUrl);
+            // Find the value element - first try by code/text mapping, then by URL
+            let matchingValueElem = codeToValueElem.get(correspondingValue) || urlToValueElem.get(correspondingValue);
             if (!matchingValueElem) return;
             
             // Update the ordre-* element (p tag with id like "ordre-M2-0")
@@ -329,6 +468,93 @@
                 ordreElem.style.color = 'blue';
             }
         });
+    };
+
+    // 🆕 --- DETECT VOCABULARY/STRUCTURE QUESTIONS ---
+    const detectStructureVocabulary = (qElem) => {
+        const questionText = qElem.textContent.trim();
+        // Check if it's asking about what a dictionary/structure is
+        if (!/Dans cette table|what is|qu'est-ce/i.test(questionText)) return;
+        
+        const labels = [...document.querySelectorAll('#choix label.choix')];
+        
+        // Check if it's asking about any value (numeric or text) - pattern: "Dans cette table, "..." est :"
+        const valueMatch = questionText.match(/Dans cette table,\s*["']([^"']+)["']\s*est/i);
+        if (valueMatch) {
+            const correctLabel = labels.find(l => /\bune\s+valeur\b/i.test(l.textContent));
+            if (correctLabel) {
+                const input = document.getElementById(correctLabel.getAttribute('for'));
+                if (input) {
+                    input.disabled = false;
+                    if (!input.checked) input.click();
+                }
+                return;
+            }
+        }
+        
+        // Check if it's asking about a record (enregistrement)
+        if (/{.*'.*'.*:.*}/i.test(questionText)) {
+            const correctLabel = labels.find(l => /enregistrement|record/i.test(l.textContent));
+            if (correctLabel) {
+                const input = document.getElementById(correctLabel.getAttribute('for'));
+                if (input) {
+                    input.disabled = false;
+                    if (!input.checked) input.click();
+                }
+            }
+        }
+    };
+
+    // 🆕 --- ANALYZE LIST COMPREHENSIONS ---
+    const analyzeComprehension = (qElem, codeSnippet) => {
+        const questionText = qElem.textContent.trim();
+        if (!/que r\u00e9alise|what does|what performs/i.test(questionText)) return;
+        if (!codeSnippet) return;
+        
+        // Extract comprehension pattern: [extraction for var in table if condition]
+        const comprehensionMatch = codeSnippet.match(/\[([^\[\]]*?)\s+for\s+(\w+)\s+in\s+(\w+)\s+if\s+([^\[\]]*?)\]/);
+        if (!comprehensionMatch) return;
+        
+        const [, extraction, var_name, table, condition] = comprehensionMatch;
+        const labels = [...document.querySelectorAll('#choix label.choix')];
+        
+        // Check for Africa-related comprehension (AF)
+        if (/continent.*==.*AF|AF.*continent/i.test(condition)) {
+            const correctLabel = labels.find(l => /afrique|africa/i.test(l.textContent));
+            if (correctLabel) {
+                const input = document.getElementById(correctLabel.getAttribute('for'));
+                if (input) {
+                    input.disabled = false;
+                    if (!input.checked) input.click();
+                }
+            }
+        }
+        
+        // Check for Europe-related comprehension (EU)
+        if (/continent.*==.*EU|EU.*continent/i.test(condition)) {
+            const correctLabel = labels.find(l => /europe|european/i.test(l.textContent));
+            if (correctLabel) {
+                const input = document.getElementById(correctLabel.getAttribute('for'));
+                if (input) {
+                    input.disabled = false;
+                    if (!input.checked) input.click();
+                }
+            }
+        }
+        
+        // Check for letter-based filtering (e.g., starts with 'F')
+        const letterMatch = condition.match(/\[0\]\s*==\s*['"]([A-Z])['"]/);
+        if (letterMatch) {
+            const letter = letterMatch[1];
+            const correctLabel = labels.find(l => new RegExp(`lettre ${letter}|letter ${letter}|starts with.*${letter}|commence.*${letter}`, 'i').test(l.textContent));
+            if (correctLabel) {
+                const input = document.getElementById(correctLabel.getAttribute('for'));
+                if (input) {
+                    input.disabled = false;
+                    if (!input.checked) input.click();
+                }
+            }
+        }
     };
 
     // 🆕 --- CLASSER CONDITIONS SELON LEUR VALEUR ---
@@ -396,11 +622,32 @@
         console.log("Question detected:", questionText);
         console.log("Code variant check:", index.__codeVariants__ ? "Enabled" : "Disabled");
         
-        highlightAnswers(questionText);
+        // Detect question type and collect answer options
+        const questionType = document.querySelector('#choix') ? 'mcq' : 'text';
+        const answers = [];
+        if (questionType === 'mcq') {
+            document.querySelectorAll('#choix .mixer').forEach(mixer => {
+                answers.push(mixer.textContent.trim());
+            });
+        }
+        
+        // Log the question
+        logQuestion({
+            questionText,
+            codeSnippet: codeSnippet ? codeSnippet.substring(0, 200) : null,
+            type: questionType,
+            answers: answers.length > 0 ? answers : null,
+            wasAnswered: false // Will be updated if answer is found
+        });
+        
+        highlightAnswers(questionText, codeSnippet);
         fillTextInputs(questionText, codeSnippet);
+        fillTextInputsFromImage(qElem); // 🆕 fill text inputs from image URL mapping
         addFusionNumbers(qElem);
-        autoFillDragDropMatching(qElem); // 🆕 handle drag-drop matching questions
-        classifyConditions(qElem); // 🆕 handle "Classer ces conditions selon leur valeur"
+        autoFillDragDropMatching(qElem);
+        classifyConditions(qElem);
+        detectStructureVocabulary(qElem); // 🆕 handle vocabulary questions about data structures
+        analyzeComprehension(qElem, codeSnippet);
     };
 
     const questionElement = await waitForElement('.mixer[id^="texte-question"]');
@@ -417,4 +664,29 @@
                 }
     });
     observer.observe(document.body, { childList: true, subtree: true });
+
+    // 🆕 --- CONSOLE COMMANDS FOR DEBUGGING ---
+    window.showNSILogs = () => {
+        const logs = JSON.parse(localStorage.getItem('nsi_extension_logs') || '[]');
+        if (logs.length === 0) {
+            console.warn("No logs yet. Navigate through questions to populate logs.");
+            return [];
+        }
+        console.table(logs);
+        console.log(`Total logged questions: ${logs.length}`);
+        return logs;
+    };
+
+    window.clearNSILogs = () => {
+        localStorage.setItem('nsi_extension_logs', '[]');
+        console.log("✅ Logs cleared!");
+    };
+
+    window.exportNSILogs = exportLogs;
+
+    console.log("%c🎓 NSI Extension Loaded!", "color: #28a745; font-size: 14px; font-weight: bold;");
+    console.log("%cAvailable Commands:", "color: #007bff; font-weight: bold;");
+    console.log("  📥 exportNSILogs() - Download logs to file");
+    console.log("  📋 showNSILogs() - Display logs in table");
+    console.log("  🗑️ clearNSILogs() - Clear all logs");
 })();
