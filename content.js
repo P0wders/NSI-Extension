@@ -122,6 +122,44 @@
         if (dictReadMatch && codeSnippet) return `base["${dictReadMatch[1]}"]["age"]`;
         if (dictUpdateMatch && codeSnippet) return `base["${dictUpdateMatch[1]}"]["age"] = ${dictUpdateMatch[2]}`;
 
+        // Handle comprehension completion questions (e.g. fill the tail of a list comprehension)
+        // Example: "Compléter l'instruction python qui permet d'extraire le nom de toutes les personnes ayant la fonction de conseiller de la table personnes. La liste doit être générée par compréhension."
+        try {
+            const wantsComprehension = /compl[eé]ter|compléter|compl[eé]ter l'?instruction/i.test(questionText) && /compr(éh|e)h?ension|compr/i.test(questionText);
+            const hasNomAndFonction = /nom/i.test(questionText) && /fonction/i.test(questionText);
+            const roleMatch = questionText.match(/fonction de\s+"?([\w\-éèêàâùûôç ]+)"?/i);
+            const tableMatch = questionText.match(/table\s+"?([\w\-éèêàâùûôç]+)"?/i);
+            let role = null;
+            if (roleMatch) {
+                // Clean role so trailing phrases like "de la table employes" are removed
+                role = roleMatch[1].trim().replace(/\s+de\s+la\s+table\s+["']?[\w\s\-éèêàâùûôç]+["']?\.?$/i, '').trim();
+                if (!role) role = null;
+            } else {
+                const simpleRole = questionText.match(/boucher|conseiller|vendeur|secretaire/i);
+                if (simpleRole) role = simpleRole[0].toLowerCase();
+            }
+            const table = tableMatch ? tableMatch[1].trim() : (questionText.match(/employes|personnes/i) ? (questionText.match(/employes/i) ? 'employes' : 'personnes') : null);
+
+            // Inspect codeSnippet to detect the variable used in the leading expression like 'p["nom"]'
+            let varName = null;
+            if (codeSnippet) {
+                // Look for patterns like p["nom"] or p['nom'] or p["prenom"] etc.
+                const varMatch = codeSnippet.match(/([a-zA-Z_]\w*)\s*\[\s*['\"]nom['\"]\s*\]/i) || codeSnippet.match(/([a-zA-Z_]\w*)\s*\[\s*['\"]prenom['\"]\s*\]/i) || codeSnippet.match(/([a-zA-Z_]\w*)\s*\[\s*['\"][^'\"]+['\"]\s*\]/i);
+                if (varMatch) varName = varMatch[1];
+            }
+
+            // Also inspect codeSnippet to see if there's a partial comprehension like '[x["nom"]' present
+            const partialComp = codeSnippet && /\[\s*([a-zA-Z_]\w*)\s*\[\s*['\"]nom['\"]\s*\]/i.test(codeSnippet);
+
+            if (wantsComprehension && hasNomAndFonction && (role || table || partialComp)) {
+                const finalRole = role || 'conseiller';
+                const finalTable = table || 'personnes';
+                // prefer the variable name found in the leading expression, else try to reuse variable from partialComp, else default to 'x'
+                const finalVar = varName || (partialComp ? codeSnippet.match(/\[\s*([a-zA-Z_]\w*)\s*\[/i)?.[1] : null) || 'x';
+                return `for ${finalVar} in ${finalTable} if ${finalVar}["fonction"]=="${finalRole}"`;
+            }
+        } catch (e) {}
+
         const listMatch = questionText.match(/\[\[(?:[^\]]+)\]\]\s*\[(\-?\d+)\]\s*\[(\-?\d+)\]/);
         if (listMatch) {
             const outer = parseInt(listMatch[1], 10);
