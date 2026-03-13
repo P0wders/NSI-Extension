@@ -1,7 +1,7 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Firefox-Extension-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" />
-<img src="https://img.shields.io/badge/Manifest-v3-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" />
+<img src="https://img.shields.io/badge/Firefox-Only-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" />
+<img src="https://img.shields.io/badge/Manifest-v3-4285F4?style=for-the-badge&logoColor=white" />
 <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" />
 
 # 🍫 Chocolatine Helper
@@ -42,12 +42,14 @@ chocolatine-helper/
 
 ---
 
-## 🚀 Installation (Firefox)
+## 🚀 Installation
+
+> 🦊 **Firefox only** — this extension does not work on Chrome or other Chromium-based browsers.
 
 1. **Clone or download** this repository
-```
-git clone https://github.com/yourname/chocolatine-helper.git
-```
+   ```
+   git clone https://github.com/yourname/chocolatine-helper.git
+   ```
 
 2. Open Firefox and go to **`about:debugging`**
 
@@ -57,7 +59,7 @@ git clone https://github.com/yourname/chocolatine-helper.git
 
 5. Navigate to [raisintine.fr/chocolatine](https://raisintine.fr/chocolatine) — the extension activates automatically
 
-> ⚠️ Temporary add-ons are removed when Firefox restarts. To persist, you need a signed extension or Firefox Developer Edition with `xpinstall.signatures.required` set to `false`.
+> ⚠️ Temporary add-ons are removed when Firefox restarts. To make it permanent, use **Firefox Developer Edition** and set `xpinstall.signatures.required` to `false` in `about:config`, then install via `about:addons` → Install Add-on From File.
 
 ---
 
