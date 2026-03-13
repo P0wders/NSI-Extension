@@ -10,6 +10,72 @@ function sleep(ms){
     return new Promise(r => setTimeout(r, ms));
 }
 
+/* ---------------- decode HTML entities ---------------- */
+
+function decodeHTMLEntities(str){
+    const txt = document.createElement("textarea");
+    txt.innerHTML = str;
+    return txt.value;
+}
+
+/* ---------------- extract answer from regex question ---------------- */
+// Priority order:
+// 1. Example has no HTML/custom tags at all → it IS the answer, use it directly.
+// 2. Example contains a known code wrapper tag (<xml>, <js>, <css>, <html>, etc.)
+//    → extract the first such block's content.
+// 3. Fallback: parse the regex pattern to extract the first literal match.
+
+function extractRegexAnswer(example, pattern){
+
+    // 1. Plain example (no tags at all) → use as-is
+    if(example && !/<[a-zA-Z]/.test(example)){
+        return decodeHTMLEntities(example.trim());
+    }
+
+    // 2. Known code wrapper tags (any lowercase tag that wraps a code answer)
+    const wrapperMatch = example.match(/<(xml|js|css|html|code|pre|sql|py|php)>([\s\S]*?)<\/\1>/i);
+    if(wrapperMatch){
+        const raw = wrapperMatch[2].replace(/<[^>]+>/g, "").trim();
+        return decodeHTMLEntities(raw);
+    }
+
+    // 3. Parse the regex pattern
+    try {
+        let p = pattern.replace(/^\^/, "").replace(/\$$/, "");
+
+        // Whole pattern is a simple alternation group: (a|b|c) → pick "a"
+        const groupMatch = p.match(/^\(([^)]+)\)[?*]?$/);
+        if(groupMatch){
+            return groupMatch[1].split("|")[0];
+        }
+
+        // General cleanup
+        p = p.replace(/\([^)]*\)\?/g, "");                  // remove optional groups
+        p = p.replace(/\(([^)|]*)\|?[^)]*\)/g, "$1");       // keep first alt of groups
+        p = p.replace(/\\(.)/g, "$1");                       // unescape
+        p = p.replace(/[?*+]/g, "");                         // remove quantifiers
+        p = p.replace(/[<>]/g, "");                          // remove leftover angle brackets
+
+        return p.trim();
+    } catch(e) {
+        return "";
+    }
+}
+
+/* ---------------- read expected answer from DOM ---------------- */
+// The #message-reponse-attendue-N-{qid} element contains text like:
+// "Réponse attendue : href="www.wikipedia.org""
+// Strip the prefix and return the bare answer.
+
+function getDOMAnswer(qid, inputIndex){
+    const el = document.querySelector(`#message-reponse-attendue-${inputIndex}-${qid}`);
+    if(!el) return null;
+    const text = el.innerText || el.textContent || "";
+    // Remove leading label ("Réponse attendue :" or "Réponses attendues :")
+    const cleaned = text.replace(/^R[ée]ponses?\s+attendues?\s*:\s*/i, "").trim();
+    return cleaned || null;
+}
+
 /* ---------------- wait for q[qid] ---------------- */
 
 async function waitForQ(qid){
@@ -20,15 +86,21 @@ async function waitForQ(qid){
     return false;
 }
 
+/* ---------------- count text inputs for a question ---------------- */
+
+function countInputs(qid){
+    let count = 0;
+    while(document.querySelector(`#reponse-${count+1}-${qid}`)) count++;
+    return count || 1;
+}
+
 /* ---------------- solve question ---------------- */
 
 async function solveQuestion(qid){
 
-    // Deduplicate: if already solved or already queued, bail immediately
     if(solved.has(qid) || pending.has(qid)) return;
     pending.add(qid);
 
-    // Wait for the page to initialize q[qid]
     const ready = await waitForQ(qid);
     if(!ready){
         console.log("solveQuestion: q[" + qid + "] never initialized");
@@ -36,10 +108,8 @@ async function solveQuestion(qid){
         return;
     }
 
-    // If another question is mid-solve, wait for it
     while(solving) await sleep(100);
 
-    // Check again after waiting — might have been solved while we waited
     if(solved.has(qid)){
         pending.delete(qid);
         return;
@@ -69,12 +139,15 @@ async function _solve(qid){
 
     await sleep(300);
 
+    const nbInputs = countInputs(qid);
+    const testArray = JSON.stringify(Array(nbInputs).fill("test"));
+
     const res = await fetch("/chocolatine/serveur.php",{
         method:"POST",
         headers:{ "Content-Type":"application/x-www-form-urlencoded" },
         body:new URLSearchParams({
             target:"reponse", op:"reponse", n:qid,
-            r_JSON:'["test"]', mode:"1", duree:"1", user:"1"
+            r_JSON: testArray, mode:"1", duree:"1", user:"1"
         })
     });
 
@@ -85,23 +158,39 @@ async function _solve(qid){
     /* ---------------- TEXT QUESTIONS ---------------- */
 
     if(data.reponses_liste){
-        let answer;
-        if(data.reponses_type && data.reponses_type[0].includes("regex")){
-            answer = data.reponses_exemple[0];
-        } else {
-            answer = data.reponses_liste.map(a => a[0]).join("");
+        for(let i = 0; i < data.reponses_liste.length; i++){
+            let answer;
+            const type    = (data.reponses_type    && data.reponses_type[i])    || "";
+            const example = (data.reponses_exemple && data.reponses_exemple[i]) || "";
+            const pattern = (data.reponses_liste[i] || [])[0] || "";
+
+            if(type.includes("regex")){
+                answer = extractRegexAnswer(example, pattern);
+                // If regex parsing produced a bad answer, fall back to the DOM label
+                if(!answer){
+                    answer = getDOMAnswer(qid, i + 1) || "";
+                }
+            } else if(type.includes("liste")){
+                // Any one value accepted, pick the first
+                answer = pattern;
+            } else {
+                answer = (data.reponses_liste[i] || []).join("");
+                answer = answer.replace(/<[^>]+>/g, "").trim();
+                answer = decodeHTMLEntities(answer);
+            }
+
+            const input = document.querySelector(`#reponse-${i+1}-${qid}`);
+            if(input){
+                input.value = answer;
+                if(q[qid].reponses) q[qid].reponses[i] = answer;
+                console.log(`TEXT input ${i+1} [${type}]:`, answer);
+            }
         }
-        answer = answer.replace(/<[^>]+>/g,"").trim();
-        const input = document.querySelector(`#reponse-1-${qid}`);
-        if(input){
-            input.value = answer;
-            q[qid].reponses[0] = answer;
-            q[qid].valider_reponse();
-        }
+        q[qid].valider_reponse();
         return;
     }
 
-    /* ---------------- GROUP / DRAG ---------------- */
+    /* ---------------- GROUP / DRAG (2D correction) ---------------- */
 
     if(Array.isArray(data.correction) && Array.isArray(data.correction[0])){
         for(let g=1; g<data.correction.length; g++){
@@ -136,6 +225,25 @@ async function _solve(qid){
             }
         }
         await sleep(200);
+        return;
+    }
+
+    /* ---------------- ORDERING (flat correction array + cad-N slots) ---------------- */
+
+    if(Array.isArray(data.correction) && data.correction.length > 0
+        && document.querySelector(`#cad-0-${qid}`)){
+
+        for(let i = 0; i < data.correction.length; i++){
+            const letter = data.correction[i];
+            const slot   = document.querySelector(`#cad-${i}-${qid}`);
+            const el     = document.querySelector(`#rep-${letter}-${qid}`);
+            if(slot && el){
+                slot.appendChild(el);
+                console.log(`ORDER: moved #rep-${letter}-${qid} -> #cad-${i}-${qid}`);
+            }
+        }
+        await sleep(200);
+        q[qid].valider_reponse();
         return;
     }
 
