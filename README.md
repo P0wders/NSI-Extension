@@ -26,6 +26,8 @@ It handles every question type on the platform:
 | 🔀 Match / drag-drop (side-by-side) | Moves each label into the right slot |
 | 🖼️ Match / drag-drop (image grid) | Drops each label under the correct image |
 | 📦 Group / sort | Places each element in the correct group |
+| 🐍 Python IDE (write from scratch) | Retrieves the solution by exhausting attempts, writes it into the Ace editor |
+| 🔧 Python IDE (fix pre-filled code) | Detects the bug from the hint and auto-applies the fix (e.g. wrapping `input()` with `int()`) |
 
 > **You always validate manually.** The extension fills the answer — clicking *Valider* is up to you.
 
@@ -35,9 +37,12 @@ It handles every question type on the platform:
 
 ```
 chocolatine-helper/
-├── manifest.json   — Extension manifest (MV3)
-├── content.js      — Injects page.js into the page context
-└── page.js         — Core logic (runs in page scope, accesses `q[]`)
+├── manifest.json        — Extension manifest (MV3)
+├── content.js           — Injects page.js into the page context
+├── page.js              — Core logic (runs in page scope, accesses q[])
+└── icons/
+    ├── logo_48.png      — Extension icon (48px)
+    └── logo_96.png      — Extension icon (96px, HiDPI)
 ```
 
 ---
@@ -65,6 +70,8 @@ chocolatine-helper/
 
 ## ⚙️ How it works
 
+### Text / QCM / Drag questions
+
 ```
 Page loads a new question
         │
@@ -88,7 +95,32 @@ Detects question type from response shape:
 Fills in the answer — waits for you to click Valider
 ```
 
+### Python IDE questions
+
+```
+Detects #qIdePy-{id} in the DOM
+        │
+        ▼
+Sends dummy code to request_tests → gets number of test cases
+        │
+        ▼
+Submits empty answers repeatedly until attempts are exhausted
+        │
+        ├── Server returns <py pre>code</py>
+        │         → Writes solution directly into Ace editor
+        │
+        └── Server returns only a text hint (fix-the-code questions)
+                  → Reads the pre-filled code from the hidden div
+                  → Applies hint-based fix (int/float/str wrapping, indentation, colons...)
+                  → Writes fixed code into Ace editor
+        │
+        ▼
+Calls valider_reponse() once — waits for you to click Valider
+```
+
 The extension uses a `pending` + `solved` set to ensure each question is only processed **once**, even though the MutationObserver can fire dozens of times per DOM insertion.
+
+Requests are spaced with an adaptive delay starting at 500ms, doubling up to 5s on rate-limit errors, then resetting on success.
 
 ---
 
