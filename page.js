@@ -174,9 +174,17 @@ async function _solve(qid){
                 // Any one value accepted, pick the first
                 answer = pattern;
             } else {
-                answer = (data.reponses_liste[i] || []).join("");
-                answer = answer.replace(/<[^>]+>/g, "").trim();
-                answer = decodeHTMLEntities(answer);
+                // If the example has a known code wrapper (<xml>, <js>, etc.),
+                // extract its content directly — the answer may itself contain HTML tags.
+                const wrapperMatch = example.match(/<(xml|js|css|html|code|pre|sql|py|php)>([\s\S]*?)<\/\1>/i);
+                if(wrapperMatch){
+                    answer = decodeHTMLEntities(wrapperMatch[2].trim());
+                } else {
+                    answer = (data.reponses_liste[i] || []).join("");
+                    // Only strip paired HTML tags (e.g. <b>foo</b>), not bare tags that ARE the answer
+                    answer = answer.replace(/<([a-zA-Z][^>]*)>([\s\S]*?)<\/\1>/g, "$2").trim();
+                    answer = decodeHTMLEntities(answer);
+                }
             }
 
             const input = document.querySelector(`#reponse-${i+1}-${qid}`);
