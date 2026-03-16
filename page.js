@@ -235,8 +235,24 @@ async function solvePython(qid){
         return;
     }
 
-    console.log('Solution:\n', code);
-    await writeToEditor(qid, code);
+    let finalCode = code;
+
+    /* If solution doesn't contain function definition,
+    keep the original first line */
+    if(!/^\s*def\s+/m.test(code)){
+        const initialCode =
+            document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML')
+            ?.innerText || "";
+
+        const firstLine = initialCode.split('\n')[0];
+
+        if(firstLine){
+            finalCode = firstLine + '\n    ' + code.trim();
+        }
+    }
+
+    console.log('Final solution:\n', finalCode);
+    await writeToEditor(qid, finalCode);
 }
 
 async function solveQuestion(qid){
