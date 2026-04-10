@@ -1,7 +1,8 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Firefox-Only-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" />
-<img src="https://img.shields.io/badge/Manifest-v3-4285F4?style=for-the-badge&logoColor=white" />
+<img src="https://img.shields.io/badge/Firefox-Supported-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" />
+<img src="https://img.shields.io/badge/Chrome-Supported-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" />
+<img src="https://img.shields.io/badge/Manifest-v3-lightgrey?style=for-the-badge&logoColor=white" />
 <img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" />
 
 # 🍫 Chocolatine Helper
@@ -49,7 +50,9 @@ chocolatine-helper/
 
 ## 🚀 Installation
 
-> 🦊 **Firefox only** — this extension does not work on Chrome or other Chromium-based browsers.
+Both Firefox and Chrome are supported. The extension uses the WebExtensions API (Manifest V3) which works on both browsers.
+
+### 🦊 Firefox
 
 1. **Clone or download** this repository
    ```
@@ -65,6 +68,25 @@ chocolatine-helper/
 5. Navigate to [raisintine.fr/chocolatine](https://raisintine.fr/chocolatine) — the extension activates automatically
 
 > ⚠️ Temporary add-ons are removed when Firefox restarts. To make it permanent, use **Firefox Developer Edition** and set `xpinstall.signatures.required` to `false` in `about:config`, then install via `about:addons` → Install Add-on From File.
+
+### 🟦 Chrome
+
+1. **Clone or download** this repository
+   ```
+   git clone https://github.com/yourname/chocolatine-helper.git
+   ```
+
+2. Open Chrome and go to **`chrome://extensions`**
+
+3. Enable **"Developer mode"** (top right toggle)
+
+4. Click **"Load unpacked"**
+
+5. Select the cloned folder
+
+6. Navigate to [raisintine.fr/chocolatine](https://raisintine.fr/chocolatine) — the extension activates automatically
+
+> ⚠️ Unpacked extensions are kept across restarts in Chrome, but Chrome may occasionally warn you about developer mode extensions on startup.
 
 ---
 
@@ -128,11 +150,10 @@ Requests are spaced with an adaptive delay starting at 500ms, doubling up to 5s 
 
 The extension is plain vanilla JS — no build step required.
 
-After editing `page.js`, just click **"Reload"** on the `about:debugging` page to apply changes.
+After editing `page.js`, reload the extension:
 
-```
-about:debugging → This Firefox → Chocolatine Helper → Reload
-```
+- **Firefox:** `about:debugging` → This Firefox → Chocolatine Helper → **Reload**
+- **Chrome:** `chrome://extensions` → Chocolatine Helper → **↺ Reload**
 
 ---
 
