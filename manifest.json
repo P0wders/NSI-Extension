@@ -18,7 +18,13 @@
   "web_accessible_resources": [
     {
       "resources": ["page.js"],
-      "matches": ["https://raisintine.fr/chocolatine/*"]
+      "matches": ["https://raisintine.fr/*"]
     }
-  ]
+  ],
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "chocolatine-helper@example.com"
+    }
+  }
 }
