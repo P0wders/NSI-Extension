@@ -83,7 +83,6 @@ function applyHintFix(code, hint){
 
     if(h.includes('int(') || (h.includes('convertir') && h.includes('entier'))){
         lines = lines.map(line => {
-            // wrap: varname = input("...") => varname = int(input("..."))
             return line.replace(/^(\s*\w+\s*=\s*)(input\s*\((.+)\))/, '$1int($2)');
         });
     }
@@ -215,6 +214,7 @@ async function solvePython(qid){
     );
 
     if(!looksLikeCode){
+        // No direct code — try hint-based fix on pre-filled code
         const initialCode = document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML')?.innerText?.trim();
         const hint = explication.replace(/<[^>]+>/g, '').trim();
 
@@ -235,20 +235,13 @@ async function solvePython(qid){
         return;
     }
 
+    // If solution doesn't contain a function definition,
+    // prepend the initial first line (e.g. "tab = ") as context
     let finalCode = code;
-
-    /* If solution doesn't contain function definition,
-    keep the original first line */
     if(!/^\s*def\s+/m.test(code)){
-        const initialCode =
-            document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML')
-            ?.innerText || "";
-
+        const initialCode = document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML')?.innerText || '';
         const firstLine = initialCode.split('\n')[0];
-
-        if(firstLine){
-            finalCode = firstLine + '\n    ' + code.trim();
-        }
+        if(firstLine) finalCode = firstLine + '\n    ' + code.trim();
     }
 
     console.log('Final solution:\n', finalCode);
@@ -300,17 +293,33 @@ async function _solve(qid){
 
     await sleep(300);
 
-    const nbInputs = countInputs(qid);
-    const testArray = JSON.stringify(Array(nbInputs).fill("test"));
+    // Detect evaluation mode (mode:2) from page param
+    const evalMode = (typeof window.param !== 'undefined' && window.param.mode === 2);
 
-    const res = await fetch("/chocolatine/serveur.php",{
-        method:"POST",
-        headers:{ "Content-Type":"application/x-www-form-urlencoded" },
-        body:new URLSearchParams({
-            target:"reponse", op:"reponse", n:qid,
-            r_JSON: testArray, mode:"1", duree:"1", user:"1"
-        })
-    });
+    let res;
+    if(evalMode){
+        // Evaluation mode: use FormData with r=test and mode=2
+        const fd = new FormData();
+        fd.append('target', 'reponse');
+        fd.append('op', 'reponse');
+        fd.append('n', qid);
+        fd.append('r', 'test');
+        fd.append('mode', '2');
+        fd.append('duree', '1');
+        fd.append('user', '1');
+        res = await fetch("/chocolatine/serveur.php", { method:"POST", body: fd });
+    } else {
+        const nbInputs = countInputs(qid);
+        const testArray = JSON.stringify(Array(nbInputs).fill("test"));
+        res = await fetch("/chocolatine/serveur.php",{
+            method:"POST",
+            headers:{ "Content-Type":"application/x-www-form-urlencoded" },
+            body:new URLSearchParams({
+                target:"reponse", op:"reponse", n:qid,
+                r_JSON: testArray, mode:"1", duree:"1", user:"1"
+            })
+        });
+    }
 
     const json = await res.json();
     const data = json.data || json;
@@ -432,26 +441,59 @@ async function _solve(qid){
     }
 }
 
-new MutationObserver((mutations)=>{
+// Single observer handling both training (DOM injection) and evaluation (class toggle) modes
+new MutationObserver((mutations) => {
     for(const m of mutations){
-        for(const node of m.addedNodes){
-            if(node.nodeType !== 1) continue;
-            let qid = null;
-            if(node.id && node.id.startsWith("cadre-formulaire-")){
-                qid = node.id.replace("cadre-formulaire-","");
-            } else {
-                const inner = node.querySelector && node.querySelector('[id^="cadre-formulaire-"]');
-                if(inner) qid = inner.id.replace("cadre-formulaire-","");
+
+        // Training mode: new #cadre-formulaire-{id} injected into DOM
+        if(m.type === 'childList'){
+            for(const node of m.addedNodes){
+                if(node.nodeType !== 1) continue;
+                let qid = null;
+                if(node.id && node.id.startsWith('cadre-formulaire-')){
+                    qid = node.id.replace('cadre-formulaire-', '');
+                } else {
+                    const inner = node.querySelector && node.querySelector('[id^="cadre-formulaire-"]');
+                    if(inner) qid = inner.id.replace('cadre-formulaire-', '');
+                }
+                if(qid){
+                    console.log('NEW QUESTION detected:', qid);
+                    solveQuestion(qid);
+                }
             }
-            if(qid){
-                console.log("NEW QUESTION detected:", qid);
-                solveQuestion(qid);
+        }
+
+        // Evaluation mode: #block-{id} loses d-none class → question becomes visible
+        if(m.type === 'attributes' && m.attributeName === 'class'){
+            const node = m.target;
+            if(node.id && node.id.startsWith('block-') && !node.classList.contains('d-none')){
+                const qid = node.id.replace('block-', '');
+                if(document.getElementById('cadre-formulaire-' + qid)){
+                    console.log('BLOCK visible:', qid);
+                    solveQuestion(qid);
+                }
             }
         }
     }
-}).observe(document.body,{childList:true,subtree:true});
+}).observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class']
+});
 
+// Training mode: solve question already on page at load time
 const firstQid = window.q ? Object.keys(window.q).pop() : null;
 if(firstQid) solveQuestion(firstQid);
+
+// Evaluation mode: solve any already-visible block on page load
+document.querySelectorAll('[id^="block-"]').forEach(block => {
+    if(!block.classList.contains('d-none')){
+        const qid = block.id.replace('block-', '');
+        if(document.getElementById('cadre-formulaire-' + qid)){
+            solveQuestion(qid);
+        }
+    }
+});
 
 })();
