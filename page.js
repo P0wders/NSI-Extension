@@ -45,6 +45,21 @@ function getDOMAnswer(qid, inputIndex){
     return text.replace(/^R[ée]ponses?\s+attendues?\s*:\s*/i, "").trim() || null;
 }
 
+// The page also reveals each expected answer inside the question text itself:
+//   <code class="aff-reponse aff-reponse-1-219">mutateur</code>
+// As long as an answer is not revealed the element still holds the placeholder
+// ("Réponse 2"), which must not be typed into the input.
+function getRevealedAnswer(qid, inputIndex){
+    const el = document.querySelector(`.aff-reponse-${inputIndex}-${qid}`);
+    if(!el) return null;
+    const text = (el.innerText || el.textContent || "").trim();
+    if(!text) return null;
+    if(/^R[ée]ponse\s*\d*$/i.test(text)) return null;
+    const input = document.querySelector(`#reponse-${inputIndex}-${qid}`);
+    if(input && text === (input.placeholder || "").trim()) return null;
+    return text;
+}
+
 async function waitForQ(qid){
     for(let i = 0; i < 50; i++){
         if(window.q && window.q[qid]) return true;
@@ -549,61 +564,97 @@ async function _solve(qid){
     const n = getFocusedQid(qid);
     const mode = getQuestionMode(n);
 
-    let data;
-    if(typeof serveur === "function"){
-        // A multi-input question needs one submitted value per input —
-        // with a single r:"0" the server only returns the first input's correction.
-        const nb = countInputs(qid);
-        const params = {op:"reponse", n:+n, mode:mode, duree:1, user:1};
-        if(nb > 1) params.r_JSON = JSON.stringify(Array(nb).fill("0"));
-        else       params.r = "0";
-        const res = await serveur("reponse", params);
-        data = res.data || res;
-    } else {
-        // Fallback: raw fetch with the old protocol (may be rejected by the server)
-        const evalMode = (typeof window.param !== 'undefined' && window.param.mode === 2);
-        let res;
-        if(evalMode){
-            const fd = new FormData();
-            fd.append('target', 'reponse');
-            fd.append('op', 'reponse');
-            fd.append('n', String(n));
-            fd.append('r', 'test');
-            fd.append('mode', String(mode));
-            fd.append('duree', '1');
-            fd.append('user', '1');
-            res = await fetch("/chocolatine/serveur.php", { method:"POST", body: fd });
-        } else {
-            const nbInputs = countInputs(qid);
-            const testArray = JSON.stringify(Array(nbInputs).fill("test"));
-            res = await fetch("/chocolatine/serveur.php",{
-                method:"POST",
-                headers:{ "Content-Type":"application/x-www-form-urlencoded" },
-                body:new URLSearchParams({
-                    target:"reponse", op:"reponse", n:String(n),
-                    r_JSON: testArray, mode:String(mode), duree:"1", user:"1"
-                })
-            });
-        }
-        const json = await res.json();
-        data = json.data || json;
+    // The server mirrors the answers we post: reponses_liste / reponses_type /
+    // reponses_exemple come back with exactly as many entries as it decoded. A
+    // 2-input question therefore has to be probed with 2 dummy values.
+    const nbInputs = countInputs(qid);
+
+    // serveur() (app.js) encodes the payload itself: an array value is posted as
+    // <key>_JSON, a scalar as <key>, and a key already ending in _JSON is
+    // JSON.stringify'd a *second* time. Passing r_JSON: JSON.stringify([...])
+    // therefore reaches the server as the string '["0","0"]' — one answer, not two.
+    async function submitViaServeur(){
+        return await serveur("reponse", {
+            op:"reponse", n:+n, mode:mode, duree:1, user:1,
+            r: nbInputs > 1 ? Array(nbInputs).fill("0") : "0"
+        });
     }
+
+    // Fallback encoding: repeated r[] fields, which is how PHP itself builds an
+    // array out of a POST. Used when the r_JSON array came back under-decoded.
+    async function submitViaFormData(){
+        const fd = new FormData();
+        fd.append('target', 'reponse');
+        if(typeof get_csrf_token === "function") fd.append('csrf_token', get_csrf_token());
+        fd.append('op', 'reponse');
+        fd.append('n', String(n));
+        fd.append('mode', String(mode));
+        fd.append('duree', '1');
+        fd.append('user', '1');
+        if(nbInputs > 1) Array(nbInputs).fill("0").forEach(v => fd.append('r[]', v));
+        else             fd.append('r', '0');
+
+        const json = await fetch('serveur.php', { method:'POST', body: fd }).then(r => r.json());
+        // Keep the page in sync exactly as serveur() would have
+        if(json && typeof apply_csrf_from_response === "function") apply_csrf_from_response(json);
+        if(json && json.injecter && typeof inject_all === "function") inject_all(json.injecter);
+        return json;
+    }
+
+    // {ok:false, notifier:["danger","<b>Débit de requête trop élevé.</b>", 3]} means
+    // we posted too fast — wait the number of seconds the server asks for and retry.
+    async function submitWithRetry(send, tries){
+        let res = null;
+        for(let i = 0; i < (tries || 4); i++){
+            res = await send();
+            if(!res || res.ok !== false) return res;
+            const secs = Array.isArray(res.notifier) && +res.notifier[2] > 0 ? +res.notifier[2] : 2;
+            console.log('Rate limited, retrying in ' + secs + 's...');
+            await sleep(secs * 1000 + 200);
+        }
+        return res;
+    }
+
+    const send = typeof serveur === "function" ? submitViaServeur : submitViaFormData;
+    let res  = await submitWithRetry(send);
+    let data = (res && res.data) || res || {};
+
+    // Server decoded fewer answers than we sent: try the r[] encoding instead
+    if(nbInputs > 1 && (data.reponses_liste || []).length < nbInputs && send !== submitViaFormData){
+        console.log('Only ' + (data.reponses_liste || []).length + '/' + nbInputs +
+                    ' answers decoded — retrying with repeated r[] fields');
+        await sleep(400);
+        const res2  = await submitWithRetry(submitViaFormData);
+        const data2 = (res2 && res2.data) || res2 || {};
+        if((data2.reponses_liste || []).length > (data.reponses_liste || []).length){
+            res = res2;
+            data = data2;
+        }
+    }
+
     console.log("SERVER:", data);
 
-    if(data.reponses_liste){
-        const nb = Math.max(data.reponses_liste.length, countInputs(qid));
+    if(res && res.ok === false && !data.reponses_liste){
+        console.log('Request rejected by the server, falling back to the DOM');
+    }
+
+    if(data.reponses_liste || document.querySelector('#reponse-1-' + qid)){
+        const listes   = data.reponses_liste   || [];
+        const nb = Math.max(listes.length, nbInputs);
         for(let i = 0; i < nb; i++){
             let answer = null;
-            const type    = (data.reponses_type    && data.reponses_type[i])    || "";
-            const example = (data.reponses_exemple && data.reponses_exemple[i]) || "";
-            const liste   = data.reponses_liste[i] || [];
+            const types    = data.reponses_type    || [];
+            const exemples = data.reponses_exemple || data.reponses_exemples || [];
+            const type    = types[i]    || "";
+            const example = exemples[i] || "";
+            const liste   = listes[i]   || [];
             const pattern = liste[0] || "";
 
             if(type.includes("regex")){
                 answer = extractRegexAnswer(example, pattern);
             } else if(type.includes("liste")){
                 answer = pattern;
-            } else {
+            } else if(liste.length || example){
                 const wrapperMatch = example.match(/<(xml|js|css|html|code|pre|sql|py|php)>([\s\S]*?)<\/\1>/i);
                 if(wrapperMatch){
                     answer = decodeHTMLEntities(wrapperMatch[2].trim());
@@ -616,9 +667,10 @@ async function _solve(qid){
                 }
             }
 
-            // Fallback for any input whose answer couldn't be derived:
-            // the hidden "Réponse attendue" div (present after a wrong attempt)
+            // Fallbacks for any input the server didn't correct: the hidden
+            // "Réponse attendue" div, then the answer revealed in the question text.
             if(!answer) answer = getDOMAnswer(qid, i + 1);
+            if(!answer) answer = getRevealedAnswer(qid, i + 1);
 
             const input = document.querySelector('#reponse-' + (i+1) + '-' + qid);
             if(input){
