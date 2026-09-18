@@ -44,6 +44,20 @@ async function waitForQ(qid){
     return false;
 }
 
+// Mirror the page's own logic: the focused question (param.qn_focus) wins,
+// falling back to the current question (param.qn). Nothing is sent when both are 0.
+function getFocusedQid(fallbackQid){
+    const p = window.param;
+    if(!p) return fallbackQid;
+    const n = p.qn_focus !== 0 ? p.qn_focus : p.qn;
+    if(n === 0 || n === undefined || n === null) return fallbackQid;
+    return +n;
+}
+
+function getQuestionMode(n){
+    return (window.q && window.q[n] && window.q[n].mode) || 1;
+}
+
 function countInputs(qid){
     let count = 0;
     while(document.querySelector(`#reponse-${count+1}-${qid}`)) count++;
@@ -153,14 +167,21 @@ async function solvePython(qid){
         }
     }
 
-    const fdT = new FormData();
-    fdT.append('target', 'question-python');
-    fdT.append('op', 'request_tests');
-    fdT.append('n', qid);
-    fdT.append('code', dummyCode);
-    fdT.append('mode', '1');
+    const n0 = getFocusedQid(qid);
+    const qMode = getQuestionMode(n0);
 
-    const testsJson = await fetch('/chocolatine/serveur.php', { method: 'POST', body: fdT }).then(r => r.json());
+    let testsJson;
+    if(typeof serveur === "function"){
+        testsJson = await serveur("question-python", {op:"request_tests", n:qid, code:dummyCode, mode:qMode});
+    } else {
+        const fdT = new FormData();
+        fdT.append('target', 'question-python');
+        fdT.append('op', 'request_tests');
+        fdT.append('n', qid);
+        fdT.append('code', dummyCode);
+        fdT.append('mode', String(qMode));
+        testsJson = await fetch('/chocolatine/serveur.php', { method: 'POST', body: fdT }).then(r => r.json());
+    }
 
     if(!testsJson?.data?.calls){
         console.log('request_tests failed:', testsJson);
@@ -176,16 +197,21 @@ async function solvePython(qid){
     while(!explication){
         await sleep(delay);
 
-        const fd = new FormData();
-        fd.append('target', 'reponse');
-        fd.append('op', 'reponse');
-        fd.append('n', qid);
-        fd.append('r_JSON', JSON.stringify(Array(nbTests).fill([''])));
-        fd.append('mode', '1');
-        fd.append('duree', '10');
-        fd.append('user', '1');
-
-        const result = await fetch('/chocolatine/serveur.php', { method: 'POST', body: fd }).then(r => r.json());
+        let result;
+        if(typeof serveur === "function"){
+            // r:"0" burns one attempt, same as the old empty r_JSON submission
+            result = await serveur("reponse", {op:"reponse", n:+n0, r:"0", mode:qMode, duree:1, user:1});
+        } else {
+            const fd = new FormData();
+            fd.append('target', 'reponse');
+            fd.append('op', 'reponse');
+            fd.append('n', qid);
+            fd.append('r_JSON', JSON.stringify(Array(nbTests).fill([''])));
+            fd.append('mode', String(qMode));
+            fd.append('duree', '10');
+            fd.append('user', '1');
+            result = await fetch('/chocolatine/serveur.php', { method: 'POST', body: fd }).then(r => r.json());
+        }
 
         if(!result.ok){
             delay = Math.min(delay * 2, 5000);
@@ -293,68 +319,95 @@ async function _solve(qid){
 
     await sleep(300);
 
-    // Detect evaluation mode (mode:2) from page param
-    const evalMode = (typeof window.param !== 'undefined' && window.param.mode === 2);
+    // The server now expects the focused question number and its real mode,
+    // via the page's own serveur() helper:
+    //   n    = param.qn_focus !== 0 ? param.qn_focus : param.qn
+    //   mode = q[n].mode
+    const n = getFocusedQid(qid);
+    const mode = getQuestionMode(n);
 
-    let res;
-    if(evalMode){
-        // Evaluation mode: use FormData with r=test and mode=2
-        const fd = new FormData();
-        fd.append('target', 'reponse');
-        fd.append('op', 'reponse');
-        fd.append('n', qid);
-        fd.append('r', 'test');
-        fd.append('mode', '2');
-        fd.append('duree', '1');
-        fd.append('user', '1');
-        res = await fetch("/chocolatine/serveur.php", { method:"POST", body: fd });
+    let data;
+    if(typeof serveur === "function"){
+        // A multi-input question needs one submitted value per input —
+        // with a single r:"0" the server only returns the first input's correction.
+        const nb = countInputs(qid);
+        const params = {op:"reponse", n:+n, mode:mode, duree:1, user:1};
+        if(nb > 1) params.r_JSON = JSON.stringify(Array(nb).fill("0"));
+        else       params.r = "0";
+        const res = await serveur("reponse", params);
+        data = res.data || res;
     } else {
-        const nbInputs = countInputs(qid);
-        const testArray = JSON.stringify(Array(nbInputs).fill("test"));
-        res = await fetch("/chocolatine/serveur.php",{
-            method:"POST",
-            headers:{ "Content-Type":"application/x-www-form-urlencoded" },
-            body:new URLSearchParams({
-                target:"reponse", op:"reponse", n:qid,
-                r_JSON: testArray, mode:"1", duree:"1", user:"1"
-            })
-        });
+        // Fallback: raw fetch with the old protocol (may be rejected by the server)
+        const evalMode = (typeof window.param !== 'undefined' && window.param.mode === 2);
+        let res;
+        if(evalMode){
+            const fd = new FormData();
+            fd.append('target', 'reponse');
+            fd.append('op', 'reponse');
+            fd.append('n', String(n));
+            fd.append('r', 'test');
+            fd.append('mode', String(mode));
+            fd.append('duree', '1');
+            fd.append('user', '1');
+            res = await fetch("/chocolatine/serveur.php", { method:"POST", body: fd });
+        } else {
+            const nbInputs = countInputs(qid);
+            const testArray = JSON.stringify(Array(nbInputs).fill("test"));
+            res = await fetch("/chocolatine/serveur.php",{
+                method:"POST",
+                headers:{ "Content-Type":"application/x-www-form-urlencoded" },
+                body:new URLSearchParams({
+                    target:"reponse", op:"reponse", n:String(n),
+                    r_JSON: testArray, mode:String(mode), duree:"1", user:"1"
+                })
+            });
+        }
+        const json = await res.json();
+        data = json.data || json;
     }
-
-    const json = await res.json();
-    const data = json.data || json;
     console.log("SERVER:", data);
 
     if(data.reponses_liste){
-        for(let i = 0; i < data.reponses_liste.length; i++){
-            let answer;
+        const nb = Math.max(data.reponses_liste.length, countInputs(qid));
+        for(let i = 0; i < nb; i++){
+            let answer = null;
             const type    = (data.reponses_type    && data.reponses_type[i])    || "";
             const example = (data.reponses_exemple && data.reponses_exemple[i]) || "";
-            const pattern = (data.reponses_liste[i] || [])[0] || "";
+            const liste   = data.reponses_liste[i] || [];
+            const pattern = liste[0] || "";
 
             if(type.includes("regex")){
                 answer = extractRegexAnswer(example, pattern);
-                if(!answer) answer = getDOMAnswer(qid, i + 1) || "";
             } else if(type.includes("liste")){
                 answer = pattern;
             } else {
                 const wrapperMatch = example.match(/<(xml|js|css|html|code|pre|sql|py|php)>([\s\S]*?)<\/\1>/i);
                 if(wrapperMatch){
                     answer = decodeHTMLEntities(wrapperMatch[2].trim());
+                } else if(example && !/<[a-zA-Z]/.test(example)){
+                    answer = decodeHTMLEntities(example.trim());
                 } else {
-                    answer = (data.reponses_liste[i] || []).join("");
+                    answer = liste.join("");
                     answer = answer.replace(/<([a-zA-Z][^>]*)>([\s\S]*?)<\/\1>/g, "$2").trim();
                     answer = decodeHTMLEntities(answer);
                 }
             }
 
+            // Fallback for any input whose answer couldn't be derived:
+            // the hidden "Réponse attendue" div (present after a wrong attempt)
+            if(!answer) answer = getDOMAnswer(qid, i + 1);
+
             const input = document.querySelector('#reponse-' + (i+1) + '-' + qid);
             if(input){
-                input.value = answer;
-                if(window.q[qid].reponses) window.q[qid].reponses[i] = answer;
-                console.log('TEXT input ' + (i+1) + ' [' + type + ']:', answer);
+                input.value = answer || "";
+                input.dispatchEvent(new Event('input', {bubbles:true}));
+                if(window.q[qid].reponses) window.q[qid].reponses[i] = input.value;
+                console.log('TEXT input ' + (i+1) + '/' + nb + ' [' + type + ']:', JSON.stringify(input.value));
+            } else {
+                console.log('TEXT input ' + (i+1) + '/' + nb + ': #reponse-' + (i+1) + '-' + qid + ' not found');
             }
         }
+        await sleep(100);
         window.q[qid].valider_reponse();
         return;
     }
