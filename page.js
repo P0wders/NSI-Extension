@@ -6,6 +6,15 @@ let solving = false;
 
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
+// Strip the blank edges and the common leading indentation of a code block —
+// a plain trim() would only unindent the first line and break the alignment.
+function dedent(code){
+    const lines = code.replace(/\r\n?/g, "\n").replace(/^\n+/, "").replace(/\s+$/, "").split("\n");
+    const indents = lines.filter(l => l.trim()).map(l => l.match(/^[ \t]*/)[0].length);
+    const min = indents.length ? Math.min(...indents) : 0;
+    return lines.map(l => l.slice(min)).join("\n");
+}
+
 function decodeHTMLEntities(str){
     const txt = document.createElement("textarea");
     txt.innerHTML = str;
@@ -139,6 +148,198 @@ function applyHintFix(code, hint){
     return lines.join('\n');
 }
 
+// Placeholder left in a skeleton the student has to complete: "... à compléter ..."
+const BLANK_RE = /\.\.\.\s*(?:à|a)\s*compl[ée]ter\s*\.\.\./i;
+
+function getInitialCode(qid){
+    const el = document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML');
+    if(!el) return "";
+    return (el.textContent || "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+}
+
+const normLine = line => line.trim().replace(/\s+/g, ' ');
+
+// Split code into its def blocks: {name, indent, bodyStart, bodyEnd, body}.
+// A block ends at the first non-blank line indented at or below the def itself.
+function indexDefs(code){
+    const lines = code.split('\n');
+    const defs = [];
+    let current = null;
+
+    const close = end => {
+        if(!current) return;
+        while(end > current.bodyStart && !lines[end-1].trim()) end--;
+        current.bodyEnd = end;
+        current.body = lines.slice(current.bodyStart, end);
+        current = null;
+    };
+
+    for(let i = 0; i < lines.length; i++){
+        const header = lines[i].match(/^([ \t]*)def\s+([A-Za-z_]\w*)\s*\(/);
+        if(header){
+            close(i);
+            current = {name: header[2], indent: header[1].length, bodyStart: i + 1};
+            defs.push(current);
+            continue;
+        }
+        if(current && lines[i].trim() && lines[i].match(/^[ \t]*/)[0].length <= current.indent){
+            close(i);
+        }
+    }
+    close(lines.length);
+    return defs;
+}
+
+// Produce the body of one skeleton method with its blanks replaced by the
+// matching lines of the solution. Returns null when nothing could be filled.
+function mergeBody(skelBody, solBody){
+    const out = [];
+    let filled = false;
+
+    // Same number of lines: the solution is the skeleton with the blanks completed,
+    // so line k answers line k. This is the usual shape of these exercises.
+    if(skelBody.length === solBody.length){
+        for(let i = 0; i < skelBody.length; i++){
+            if(!BLANK_RE.test(skelBody[i])){ out.push(skelBody[i]); continue; }
+            const replacement = solBody[i].trim();
+            if(!replacement){ out.push(skelBody[i]); continue; }
+            out.push(skelBody[i].match(/^[ \t]*/)[0] + replacement);
+            filled = true;
+        }
+        return filled ? out : null;
+    }
+
+    // Otherwise anchor on the lines the two versions share and take whatever sits
+    // between them in the solution — this covers a blank filled by several lines.
+    let j = 0;
+    for(let i = 0; i < skelBody.length; i++){
+        const line = skelBody[i];
+        if(!BLANK_RE.test(line)){
+            out.push(line);
+            const k = solBody.findIndex((l, idx) => idx >= j && normLine(l) === normLine(line));
+            if(k !== -1) j = k + 1;
+            continue;
+        }
+
+        const anchor = skelBody.slice(i + 1).find(l => l.trim() && !BLANK_RE.test(l));
+        let end = solBody.length;
+        if(anchor){
+            const k = solBody.findIndex((l, idx) => idx >= j && normLine(l) === normLine(anchor));
+            if(k === -1){ out.push(line); continue; }   // lost the alignment: keep the blank
+            end = k;
+        }
+
+        const chunk = solBody.slice(j, end).filter(l => l.trim());
+        if(!chunk.length){ out.push(line); continue; }
+
+        const blankIndent = line.match(/^[ \t]*/)[0];
+        const chunkBase = Math.min(...chunk.map(l => l.match(/^[ \t]*/)[0].length));
+        chunk.forEach(l => out.push(blankIndent + l.slice(chunkBase)));
+        j = end;
+        filled = true;
+    }
+    return filled ? out : null;
+}
+
+// The example answer often comes from another variant of the same question, where
+// the attribute goes by a different name (self.contenu vs self.valeurs). When the
+// solution uses exactly one unknown name and exactly one of the skeleton's own
+// attributes is left untouched, the mapping between them is unambiguous.
+function remapAttributes(skeleton, solution){
+    const attrs   = new Set([...skeleton.matchAll(/self\.(\w+)\s*=(?!=)/g)].map(m => m[1]));
+    const methods = new Set([...skeleton.matchAll(/def\s+(\w+)\s*\(/g)].map(m => m[1]));
+    const used    = new Set([...solution.matchAll(/self\.(\w+)/g)].map(m => m[1]));
+
+    const unknown = [...used].filter(name => !attrs.has(name) && !methods.has(name));
+    if(unknown.length !== 1) return solution;
+
+    // Prefer the attribute the solution never mentions; failing that — the example
+    // may use both names at once — the only one holding a collection.
+    let target = [...attrs].filter(name => !used.has(name));
+    if(target.length !== 1){
+        target = [...skeleton.matchAll(/self\.(\w+)\s*=\s*(?:\[\s*\]|\{\s*\}|\(\s*\)|list\(\)|dict\(\)|set\(\))/g)]
+            .map(m => m[1]);
+        target = [...new Set(target)];
+    }
+    if(target.length !== 1) return solution;
+
+    console.log('Solution uses self.' + unknown[0] + ', skeleton declares self.' + target[0] + ' — renaming');
+    return solution.replace(new RegExp('self\\.' + unknown[0] + '\\b', 'g'), 'self.' + target[0]);
+}
+
+// "Fill in the blanks" question: keep the given skeleton and only complete the
+// "... à compléter ..." lines. Overwriting the editor with the server's example
+// would drop the surrounding class and rename its attributes, which fails the tests.
+function fillBlanks(skeleton, solution){
+    if(!BLANK_RE.test(skeleton)) return null;
+
+    solution = remapAttributes(skeleton, solution);
+    const lines   = skeleton.split('\n');
+    const solDefs = indexDefs(solution);
+    let filled = false;
+
+    // Last def first, so an earlier splice never shifts a later def's line numbers
+    for(const def of indexDefs(skeleton).reverse()){
+        if(!def.body.some(l => BLANK_RE.test(l))) continue;
+        const match = solDefs.find(d => d.name === def.name);
+        if(!match) continue;
+        const merged = mergeBody(def.body, match.body);
+        if(!merged) continue;
+        lines.splice(def.bodyStart, def.bodyEnd - def.bodyStart, ...merged);
+        filled = true;
+    }
+
+    // A skeleton with a single blank and a solution that is just the missing
+    // expression (no def to match on) is still worth completing.
+    if(!filled && !solDefs.length){
+        const blanks = lines.filter(l => BLANK_RE.test(l)).length;
+        const body   = solution.trim();
+        if(blanks === 1 && body && !body.includes('\n')){
+            const i = lines.findIndex(l => BLANK_RE.test(l));
+            lines[i] = lines[i].match(/^[ \t]*/)[0] + body;
+            filled = true;
+        }
+    }
+
+    return filled ? lines.join('\n') : null;
+}
+
+// The solution can come back in several places depending on the question and on
+// which attempt revealed it:
+//   - explication         : usually HTML, with the code inside <py> / <py pre>
+//   - reponses_exemples   : array of raw Python (no markup) — sent on the last attempt
+//   - reponses_exemple    : singular variant used by the text questions
+// Returns the first one that actually holds code.
+function extractPythonSolution(data){
+    if(!data) return null;
+
+    const sources = [];
+    if(data.explication) sources.push(data.explication);
+    for(const key of ["reponses_exemples", "reponses_exemple", "solution", "correction"]){
+        const value = data[key];
+        if(Array.isArray(value)) sources.push(...value.filter(v => typeof v === "string" && v.trim()));
+        else if(typeof value === "string" && value.trim()) sources.push(value);
+    }
+
+    for(const source of sources){
+        let code = source.match(/<py\s+pre>([\s\S]*?)<\/py>/)?.[1]
+                || source.match(/<py>([\s\S]*?)<\/py>/)?.[1]
+                || source.match(/<(?:pre|code)[^>]*>([\s\S]*?)<\/(?:pre|code)>/i)?.[1];
+
+        // Raw code with no markup around it (reponses_exemples) is usable as-is
+        if(code === undefined && !/<[a-zA-Z][^>]*>/.test(source)) code = source;
+        if(code === undefined) continue;
+
+        code = dedent(decodeHTMLEntities(code));
+        const looksLikeCode = code && (
+            code.includes('=') || code.includes(':') ||
+            code.includes('(') || code.includes('return')
+        );
+        if(looksLikeCode) return code;
+    }
+    return null;
+}
+
 async function solvePython(qid){
     console.log('Solving Python IDE question:', qid);
 
@@ -191,10 +392,11 @@ async function solvePython(qid){
     const nbTests = testsJson.data.calls.length;
     console.log('Number of tests:', nbTests);
 
+    let code = null;
     let explication = null;
     let delay = 500;
 
-    while(!explication){
+    while(!code){
         await sleep(delay);
 
         let result;
@@ -204,45 +406,46 @@ async function solvePython(qid){
         } else {
             const fd = new FormData();
             fd.append('target', 'reponse');
+            if(typeof get_csrf_token === "function") fd.append('csrf_token', get_csrf_token());
             fd.append('op', 'reponse');
             fd.append('n', qid);
             fd.append('r_JSON', JSON.stringify(Array(nbTests).fill([''])));
             fd.append('mode', String(qMode));
             fd.append('duree', '10');
             fd.append('user', '1');
-            result = await fetch('/chocolatine/serveur.php', { method: 'POST', body: fd }).then(r => r.json());
+            result = await fetch('serveur.php', { method: 'POST', body: fd }).then(r => r.json());
         }
 
         if(!result.ok){
-            delay = Math.min(delay * 2, 5000);
-            console.log('Rate limited, retrying in ' + delay + 'ms...');
+            const secs = Array.isArray(result.notifier) && +result.notifier[2] > 0 ? +result.notifier[2] : 0;
+            delay = secs ? secs * 1000 + 200 : Math.min(delay * 2, 5000);
+            console.log('Request refused, retrying in ' + delay + 'ms...');
             continue;
         }
 
-        if(result.data?.explication){
-            explication = result.data.explication;
-        } else if(!result.data?.reste_tentative){
-            console.log('Could not retrieve solution');
+        if(result.data?.explication) explication = result.data.explication;
+
+        // The solution may arrive as <py> markup in explication or as raw code
+        // in reponses_exemples, depending on the question and the attempt.
+        code = extractPythonSolution(result.data);
+        if(code) break;
+
+        if(!result.data?.reste_tentative){
+            console.log('Server returned no solution:', result.data);
             break;
-        } else {
-            delay = 500;
         }
+        delay = 500;
     }
 
-    if(!explication) return;
-
-    let code = explication.match(/<py\s+pre>([\s\S]*?)<\/py>/)?.[1]?.trim()
-            || explication.match(/<py>([\s\S]*?)<\/py>/)?.[1]?.trim();
-
-    const looksLikeCode = code && (
-        code.includes('=') || code.includes(':') ||
-        code.includes('(') || code.includes('return')
-    );
-
-    if(!looksLikeCode){
+    if(!code){
         // No direct code — try hint-based fix on pre-filled code
-        const initialCode = document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML')?.innerText?.trim();
-        const hint = explication.replace(/<[^>]+>/g, '').trim();
+        const initialCode = getInitialCode(qid).trim();
+        const hint = (explication || "").replace(/<[^>]+>/g, '').trim();
+
+        if(!hint){
+            console.log('No solution and no hint returned — nothing to write.');
+            return;
+        }
 
         if(!initialCode){
             console.log('No code solution and no initial code found.');
@@ -261,13 +464,33 @@ async function solvePython(qid){
         return;
     }
 
+    const initial = getInitialCode(qid);
+
+    // Fill-in-the-blanks question: complete the skeleton instead of replacing it
+    const completed = fillBlanks(initial, code);
+    if(completed){
+        console.log('Completed the skeleton in place:\n', completed);
+        await writeToEditor(qid, completed);
+        return;
+    }
+    if(BLANK_RE.test(initial)){
+        console.log('Skeleton has blanks but none could be matched to the solution — writing it whole');
+    }
+
     // If solution doesn't contain a function definition,
-    // prepend the initial first line (e.g. "tab = ") as context
+    // prepend the initial first line (e.g. "def f(x):" or "tab = ") as context
     let finalCode = code;
     if(!/^\s*def\s+/m.test(code)){
-        const initialCode = document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML')?.innerText || '';
+        const initialCode = initial;
         const firstLine = initialCode.split('\n')[0];
-        if(firstLine) finalCode = firstLine + '\n    ' + code.trim();
+        if(firstLine){
+            // When that line opens a block, the whole solution is its body: every
+            // line has to be indented, not just the first, or Python won't parse it.
+            const body = firstLine.trimEnd().endsWith(':')
+                ? code.split('\n').map(line => line.trim() ? '    ' + line : line).join('\n')
+                : code;
+            finalCode = firstLine + '\n' + body;
+        }
     }
 
     console.log('Final solution:\n', finalCode);
