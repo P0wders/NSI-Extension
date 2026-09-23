@@ -9,6 +9,16 @@ const remoteVersion = fetch(REMOTE_MANIFEST_URL, { cache: "no-store" })
     .then(m => m && m.version)
     .catch(() => null);
 
+// Compare dotted versions numerically: "1.10" > "1.9", "1.3" == "1.3.0".
+function isNewer(remote, local){
+    const a = remote.split(".").map(Number), b = local.split(".").map(Number);
+    for(let i = 0; i < Math.max(a.length, b.length); i++){
+        const x = a[i] || 0, y = b[i] || 0;
+        if(x !== y) return x > y;
+    }
+    return false;
+}
+
 const script = document.createElement("script");
 script.src = runtime.getURL("page.js");
 script.onload = async () => {
@@ -17,7 +27,7 @@ script.onload = async () => {
     const remote = await remoteVersion;
     // page.js runs in the page world, where alertify lives. Pass a JSON string:
     // Firefox hides objects created by content scripts from page code.
-    if(remote && remote !== local){
+    if(remote && isNewer(remote, local)){
         window.dispatchEvent(new CustomEvent("chocolatine-helper-update", {
             detail: JSON.stringify({ local, remote })
         }));
