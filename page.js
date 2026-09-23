@@ -1,3 +1,27 @@
+// Update notice: content.js compares the installed version with the one on
+// GitHub and fires this event when they differ.
+window.addEventListener("chocolatine-helper-update", (e) => {
+    const { local, remote } = JSON.parse(e.detail);
+    const url = "https://github.com/P0wders/NSI-Extension";
+    const tps = 30;                                // seconds on screen
+    let tries = 0;
+    (function show(){
+        // alertify is loaded by the site and may not be ready yet
+        if(!window.alertify){
+            if(++tries < 50) setTimeout(show, 200);
+            return;
+        }
+        alertify.set('notifier', 'position', 'bottom-right');
+        const n = alertify.warning(
+            `🍫 <b>New version available!</b><br>Version ${remote} is out (you have ${local}), click here to see what's new.` +
+            `<div class='alertify-progress-bar' style='background-color:#FFC107;animation:progressBar ${tps}s linear;'></div>`,
+            tps,
+            (isClicked) => { if (isClicked) window.open(url, "_blank", "noopener"); }
+        );
+        n.element.style.cursor = "pointer";
+    })();
+});
+
 (async () => {
 
 const solved = new Set();
@@ -190,8 +214,8 @@ function applyHintFix(code, hint){
     return lines.join('\n');
 }
 
-// Placeholder left in a skeleton the student has to complete: "... à compléter ..."
-const BLANK_RE = /\.\.\.\s*(?:à|a)\s*compl[ée]ter\s*\.\.\./i;
+// Placeholder left in a skeleton the student has to complete: "..." or "... à compléter ..."
+const BLANK_RE = /^\s*\.\.\.(?:\s*(?:à|a)\s*compl[ée]ter\s*\.\.\.)?\s*$/i;
 
 function getInitialCode(qid){
     const el = document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML');
