@@ -92,7 +92,34 @@ function isPythonQuestion(qid){
     return !!document.querySelector(`#qIdePy-${qid}`);
 }
 
+// Preferred writer: goes through window.pythonIDE (the page's own editor registry).
+// _pythonIdeSkipLockedGuard disables the locked-editor guard for this one setValue,
+// syncEditorRowGuard keeps the page's row guard in sync, and refreshing q[n].last_code
+// keeps the nocp "big jump" check from reverting the write.
+function writeViaPythonIDE(qid, code){
+    const ideId = `qIdePy-${qid}`;
+    const editor = window.pythonIDE?.editors?.get(ideId);
+    if(!editor) return false;
+
+    editor._pythonIdeSkipLockedGuard = true;
+    editor.setValue(code, 1);          // 1 = cursor at end
+    editor._pythonIdeSkipLockedGuard = false;
+    window.pythonIDE.syncEditorRowGuard?.(ideId, code);
+
+    // Keep the nocp check from seeing a big jump and reverting it
+    if(window.q?.[qid]){
+        window.q[qid].last_code = code;
+        window.q[qid].valider_reponse();  // re-runs valide_sans / valide_taille and enables "Valider"
+    }
+    return true;
+}
+
 async function writeToEditor(qid, code){
+    if(writeViaPythonIDE(qid, code)){
+        console.log('Code written into editor (pythonIDE)!');
+        return;
+    }
+
     const editorEl = document.querySelector(`#qIdePy-${qid}-ide-python-editor`);
     if(!editorEl){ console.log('Editor element not found'); return; }
 
