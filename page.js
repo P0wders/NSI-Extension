@@ -214,8 +214,13 @@ function applyHintFix(code, hint){
     return lines.join('\n');
 }
 
-// Placeholder left in a skeleton the student has to complete: "..." or "... à compléter ..."
+// Placeholder left in a skeleton the student has to complete. Two shapes:
+//   - a whole line: "..." or "... à compléter ..."
+//   - embedded in a line: "return ... à compléter ..."
 const BLANK_RE = /^\s*\.\.\.(?:\s*(?:à|a)\s*compl[ée]ter\s*\.\.\.)?\s*$/i;
+const EMBEDDED_BLANK_RE = /\.\.\.(?:\s*(?:à|a)\s*compl[ée]ter\s*\.\.\.)?/i;
+function lineHasBlank(line){ return BLANK_RE.test(line) || EMBEDDED_BLANK_RE.test(line); }
+function codeHasBlank(code){ return code.split(String.fromCharCode(10)).some(lineHasBlank); }
 
 function getInitialCode(qid){
     const el = document.querySelector('#qIdePy-' + qid + '-ide-python-intial-inner-HTML');
@@ -266,10 +271,30 @@ function mergeBody(skelBody, solBody){
     // so line k answers line k. This is the usual shape of these exercises.
     if(skelBody.length === solBody.length){
         for(let i = 0; i < skelBody.length; i++){
-            if(!BLANK_RE.test(skelBody[i])){ out.push(skelBody[i]); continue; }
+            const line = skelBody[i];
+            if(!lineHasBlank(line)){ out.push(line); continue; }
             const replacement = solBody[i].trim();
-            if(!replacement){ out.push(skelBody[i]); continue; }
-            out.push(skelBody[i].match(/^[ \t]*/)[0] + replacement);
+            if(!replacement){ out.push(line); continue; }
+            const indent = line.match(/^[ \t]*/)[0];
+            if(BLANK_RE.test(line)){
+                out.push(indent + replacement);
+            } else {
+                // Embedded blank ("return ... à compléter ..."): keep the code
+                // before the marker and graft on the solution's completion.
+                const m = line.match(new RegExp('^(.*?)(' + EMBEDDED_BLANK_RE.source + ')(.*)$', 'i'));
+                const head = m[1], tail = m[3];
+                const headTrim = head.trim();
+                let completion = replacement;
+                if(headTrim && replacement.startsWith(headTrim)){
+                    completion = replacement.slice(headTrim.length);
+                } else if(headTrim){
+                    // Head may end mid-statement — align on its last token.
+                    const tok = headTrim.split(/\s+/).pop();
+                    const k = replacement.indexOf(tok);
+                    if(k !== -1) completion = replacement.slice(k + tok.length);
+                }
+                out.push(head + (/\s$/.test(head) ? completion.replace(/^\s+/, '') : completion) + tail);
+            }
             filled = true;
         }
         return filled ? out : null;
@@ -280,14 +305,14 @@ function mergeBody(skelBody, solBody){
     let j = 0;
     for(let i = 0; i < skelBody.length; i++){
         const line = skelBody[i];
-        if(!BLANK_RE.test(line)){
+        if(!lineHasBlank(line)){
             out.push(line);
             const k = solBody.findIndex((l, idx) => idx >= j && normLine(l) === normLine(line));
             if(k !== -1) j = k + 1;
             continue;
         }
 
-        const anchor = skelBody.slice(i + 1).find(l => l.trim() && !BLANK_RE.test(l));
+        const anchor = skelBody.slice(i + 1).find(l => l.trim() && !lineHasBlank(l));
         let end = solBody.length;
         if(anchor){
             const k = solBody.findIndex((l, idx) => idx >= j && normLine(l) === normLine(anchor));
@@ -337,7 +362,7 @@ function remapAttributes(skeleton, solution){
 // "... à compléter ..." lines. Overwriting the editor with the server's example
 // would drop the surrounding class and rename its attributes, which fails the tests.
 function fillBlanks(skeleton, solution){
-    if(!BLANK_RE.test(skeleton)) return null;
+    if(!codeHasBlank(skeleton)) return null;
 
     solution = remapAttributes(skeleton, solution);
     const lines   = skeleton.split('\n');
@@ -346,7 +371,7 @@ function fillBlanks(skeleton, solution){
 
     // Last def first, so an earlier splice never shifts a later def's line numbers
     for(const def of indexDefs(skeleton).reverse()){
-        if(!def.body.some(l => BLANK_RE.test(l))) continue;
+        if(!def.body.some(lineHasBlank)) continue;
         const match = solDefs.find(d => d.name === def.name);
         if(!match) continue;
         const merged = mergeBody(def.body, match.body);
@@ -358,10 +383,10 @@ function fillBlanks(skeleton, solution){
     // A skeleton with a single blank and a solution that is just the missing
     // expression (no def to match on) is still worth completing.
     if(!filled && !solDefs.length){
-        const blanks = lines.filter(l => BLANK_RE.test(l)).length;
+        const blanks = lines.filter(lineHasBlank).length;
         const body   = solution.trim();
         if(blanks === 1 && body && !body.includes('\n')){
-            const i = lines.findIndex(l => BLANK_RE.test(l));
+            const i = lines.findIndex(lineHasBlank);
             lines[i] = lines[i].match(/^[ \t]*/)[0] + body;
             filled = true;
         }
@@ -539,7 +564,7 @@ async function solvePython(qid){
         await writeToEditor(qid, completed);
         return;
     }
-    if(BLANK_RE.test(initial)){
+    if(codeHasBlank(initial)){
         console.log('Skeleton has blanks but none could be matched to the solution — writing it whole');
     }
 
